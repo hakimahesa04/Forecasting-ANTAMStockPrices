@@ -1,0 +1,638 @@
+---
+title: "ARIMAX-GARCH pada Data Saham ANTM.JK"
+author: "Kelompok 1 MPDW"
+date: "2023-11-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Packages
+```{r}
+library(readxl)
+library(TTR)
+library(forecast)
+library(tseries)
+library(TSA)
+library(dynlm)
+library(lmtest)
+library(imputeTS)
+library(stats)
+library(MASS)
+library(padr)
+library(astsa)
+library(tfarima)
+library(FinTS)
+library(rio)
+library(ggplot2)
+library(tsibble)
+library(tseries)
+library(MASS)
+library(dplyr)
+library(TTR)
+library(forecast)
+library(lmtest)
+library(orcutt)
+library(HoRM)
+library(dLagM)
+library(dynlm)
+library(MLmetrics)
+library(car)
+library(TSA)
+library(aTSA)
+library (rio)
+library(rugarch)
+```
+
+## Pre Processing Data
+### Input Data
+Data yang digunakan adalah Harga Penutupan Saham ANTAM mingguan dengan total 305 periode, yaitu mulai dari tanggal 1 Januari 2018 sampai 30 Oktober 2023 
+```{r}
+library(readxl)
+data <- read_excel("C:\\Users\\HAKIM\\OneDrive\\Documents\\Portofolio Github\\MPDW\\ARIMAX-ARCHGARCH\\Harga Close Saham ANTAM.xlsx")
+data
+```
+
+### Mengecek Keberadaan Missing Value
+```{r}
+data[which(is.na(data$Close)),]
+```
+
+Tidak ada missing value pada data yang digunakan
+
+### Mengubah Data Menjadi Data Time Series
+```{r}
+library(utils)
+data.ts <- ts(data$Close)
+data.ts
+```
+
+## Eksplorasi Data
+
+### Plot Data Penuh
+```{r}
+library(ggplot2)
+
+data$Date <- as.Date(data$Date)
+
+# Tentukan indeks pembatas antara data train dan data test
+index_pemisah <- 244
+
+# Plot menggunakan ggplot2
+ggplot(data, aes(x = Date, y = Close)) + 
+  geom_line() +
+  geom_line(data = data.frame(x = data$Date[index_pemisah], y = range(data$Close)), 
+            aes(x = x, y = y, color = "Pembatas Data Latih-Uji"), 
+            linetype = "dashed", linewidth = 0.6) + 
+  scale_x_date(date_breaks = "8 months", date_labels = "%Y %b") +
+  labs(title = "Plot Harga Penutupan Saham ANTAM", x = "Tanggal", y = "Saham ANTAM", color = "") + 
+  theme_bw() + 
+  theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, size = 12),
+        legend.position = "bottom", 
+        legend.title = element_blank(),
+        legend.direction = "vertical") +  
+  scale_color_manual(values = "red", name = "Pembatas Data Latih-Uji", 
+                     guide = guide_legend(override.aes = list(linetype = "dashed", angle = 180, size = 1.5)))
+```
+
+Berdasarkan plot data deret waktu, terlihat bahwa data cenderung memiliki trend yang naik. Berdasarkan pola data, pembagian data latih dan data uji ditetapkan dengan proporsi 80%:20% sehingga 244 periode untuk data latih dan 61 periode untuk data uji.
+
+### Pembagian Data
+```{r}
+data.train <- data[1:244,]
+data.ts.train <- data.ts[1:244]
+data.test <- data[245:305,]
+data.ts.test <- data.ts[245:305]
+```
+
+### Plot Data Latih
+```{r}
+library(ggplot2)
+ggplot() + 
+  geom_line(data = data.train, aes(x=Date, y=Close)) +
+  labs(title = "Plot Data Train Harga Penutupan Saham ANTAM", x = "Tanggal", y = "Saham ANTAM", color = "Legend") + scale_x_date(date_breaks = "6 months", date_labels = "%Y %b") +
+  theme_bw() + theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+                     plot.caption = element_text(hjust=0.5, size=12)) +
+  scale_color_manual(values = "black")
+```
+
+Berdasarkan plot data deret waktu pada data latih, terlihat bahwa data cenderung tidak bergerak pada nilai tengah tertentu. Hal ini mengindikasikan bahwa data tidak stasioner dalam rataan. Mulai periode ke-154 yaitu tanggal 7 Desember 2020, nilai harga penutupan saham ANTAM naik secara signifikan. Hal ini menjadi alasan untuk penggunaan model ARIMAX. Plot data deret waktu juga cenderung fluktuatif dengan ragam yang tidak konstan sehingga dapat dikatakan bahwa data tidak stasioner dalam ragam.
+
+### Plot Data Uji
+```{r}
+library(ggplot2)
+ggplot() + 
+  geom_line(data = data.test, aes(x=Date, y=Close)) +
+  labs(title = "Plot Data Test Harga Penutupan Saham ANTAM", x = "Tanggal", y = "Saham ANTAM", color = "Legend") + scale_x_date(date_breaks = "3 months", date_labels = "%Y %b") +
+  theme_bw() + theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+                     plot.caption = element_text(hjust=0.5, size=12)) +
+  scale_color_manual(values = "black")
+```
+
+Berdasarkan plot data deret waktu pada data uji, terlihat bahwa data cenderung fluktuatif.
+
+## Uji Stasioneritas Data
+### 1. Uji Kestasioneran dalam Rataan
+### Plot ACF
+```{r}
+acf(data.ts.train)
+```
+
+Berdasarkan plot ACF, terlihat bahwa plot ACF data menurun secara perlahan (*tails of slowly*). Hal ini juga menjadi indikasi bahwa data tidak stasioner dalam rataan.
+
+### Uji ADF
+```{r}
+tseries::adf.test(data.ts.train)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.5073 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa data tidak stasioner dalam rataan. Hal ini sesuai dengan hasil eksplorasi menggunakan plot data deret waktu dan plot ACF, sehingga ketidakstasioneran model dalam rataan kedepannya harus ditangani.
+
+### 2. Uji Kestasioneran dalam Ragam
+### Plot Box-Cox
+```{r}
+index <- seq(1:244)
+bc = boxcox(data.ts.train~index, lambda = seq(-2,2,by=1))
+#Nilai Rounded Lambda
+lambda <- bc$x[which.max(bc$y)]
+lambda
+#SK
+bc$x[bc$y > max(bc$y) - 1/2 * qchisq(.95,1)]
+```
+
+Plot Box-Cox menunjukkan nilai *rounded value* ($\lambda$) optimum sebesar **0.02020202** dan pada selang kepercayaan 95% nilai memiliki batas bawah **-0.18181818** dan batas atas **0.26262626**. Selang tersebut tidak memuat nilai satu sehingga dapat dikatakan bahwa data tidak stasioner dalam ragam.
+
+## Penanganan Ketidakstasioneran Data
+### Ketidakstasioneran dalam Ragam
+Dalam selang kepercayaan 95% berdasarkan plot Box-Cox terdapat nilai 0. Oleh karena itu, dilakukan transformasi Box-Cox dengan menggunakan logaritma.
+```{r}
+data.trans <- log(data$Close)
+train.trans <- log(data.ts.train)
+test.trans <- log(data.ts.test)
+```
+
+### Plot Box-Cox
+```{r}
+index <- seq(1:244)
+bc = boxcox(train.trans~index, lambda = seq(-7,10,by=1))
+#Nilai Rounded Lambda
+lambda <- bc$x[which.max(bc$y)]
+lambda
+#SK
+bc$x[bc$y > max(bc$y) - 1/2 * qchisq(.95,1)]
+```
+
+Plot Boxcox menunjukkan nilai *rounded value* ($\lambda$) optimum sebesar **1.070707** dan pada selang kepercayaan 95% nilai memiliki batas bawah **-0.47474747** dan batas atas **2.78787879**. Selang tersebut memuat nilai 1 sehingga hal ini menandakan data sudah stasioner dalam ragam dan ketidakstasioneran data dalam ragam telah berhasil tertangani.
+
+### Ketidakstasioneran dalam Rataan
+### Plot ACF
+```{r}
+acf(train.trans)
+```
+
+Berdasarkan plot ACF, terlihat bahwa plot ACF data menurun secara perlahan (*tails of slowly*). Hal ini menjadi indikasi bahwa data belum stasioner dalam rataan.
+
+### Uji ADF
+```{r}
+tseries::adf.test(train.trans)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.5475 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa data tidak stasioner dalam rataan. Hal ini sesuai dengan hasil eksplorasi dengan plot ACF, sehingga ketidakstasioneran model dalam rataan kedepannya harus ditangani.
+
+## Pembedaan sebanyak 1 kali
+```{r}
+train.diff<-diff(train.trans,differences = 1) 
+plot.ts(train.diff, lty=1, xlab="Minggu ke-", ylab="Data Difference 1", main="Plot Difference 1 ANTAM")
+```
+
+Berdasarkan plot data deret waktu, terlihat bahwa data sudah stasioner dalam rataan ditandai dengan data bergerak pada nilai tengah tertentu.
+
+### Plot ACF
+```{r}
+acf(train.diff)
+```
+
+Berdasarkan plot tersebut, terlihat bahwa plot ACF *cuts off* pada lag ke 14. Hal ini menandakan data sudah stasioner dalam rataan dan ketidakstasioneran data telah berhasil tertangani.
+
+## Uji ADF
+```{r}
+tseries::adf.test(train.diff)
+```
+
+$H_0$ : Data tidak stasioner dalam rataan
+
+$H_1$ : Data stasioner dalam rataan
+
+Berdasarkan uji ADF tersebut, didapat *p-value* sebesar 0.01 yang lebih kecil dari taraf nyata 5% sehingga tolak $H_0$ atau data stasioner dalam rataan. Hal ini sesuai dengan hasil eksplorasi menggunakan plot data deret waktu dan plot ACF, sehingga dalam hal ini ketidakstasioneran data sudah berhasil ditangani dan dapat dilanjutkan ke pemodelan ARIMAX
+
+## Pemodelan ARIMAX
+
+### Import Data Variabel X
+```{r}
+library(readxl)
+data_nikel<- read_excel("C:\\Users\\HAKIM\\OneDrive\\Documents\\Portofolio Github\\MPDW\\ARIMAX-ARCHGARCH\\Harga Nikel Berjangka.xlsx")
+nikel<- data_nikel$Nikel
+nikel<- log(nikel)
+```
+
+## Ubah data time series
+```{r}
+nikel.ts <- ts(nikel)
+```
+
+## Eksplorasi Data
+### Plot Penuh Data Deret Waktu
+```{r}
+library(ggplot2)
+
+data_nikel$Date <- as.Date(data_nikel$Date)
+
+# Tentukan indeks pembatas antara data train dan data test
+index_pemisah <- 244
+
+# Plot menggunakan ggplot2
+ggplot(data_nikel, aes(x = Date, y = Nikel)) + 
+  geom_line() +
+  geom_line(data = data.frame(x = data_nikel$Date[index_pemisah], y = range(data_nikel$Nikel)), 
+            aes(x = x, y = y, color = "Pembatas Data Train-Test"), linetype = "dashed", linewidth = 0.6) + 
+  scale_x_date(date_breaks = "8 months", date_labels = "%Y %b") +
+  labs(title = "Plot Harga Nikel Berjangka", x = "Tanggal", y = "Nikel (rupiah)", color = "") + 
+  theme_bw() + 
+  theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+        plot.caption = element_text(hjust = 0.5, size = 12),
+        legend.position = "bottom", 
+        legend.title = element_blank()) +  
+  scale_color_manual(values = "red", name = "Pembatas Data Train-Test", guide = guide_legend(override.aes = list(size = 1.5))) 
+```
+
+## Split Data
+```{r}
+nikel.train <- nikel[1:244]
+nikel.train.ts <- ts(nikel.train)
+nikel.test <- nikel[245:305]
+nikel.test.ts <- ts(nikel.test)
+```
+
+## Plot Data Train Harga Nikel
+```{r}
+data_nikel.train <- data_nikel[1:244,]
+library(ggplot2)
+ggplot() + 
+  geom_line(data = data_nikel.train, aes(x=Date, y=Nikel)) + scale_x_date(date_breaks = "6 months", date_labels = "%Y %b") +
+  labs(title = "Plot Data Train Harga Nikel Berjangka", x = "Tanggal", y = "Nikel (rupiah)", color = "Legend") + 
+  theme_bw() + theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+                     plot.caption = element_text(hjust=0.5, size=12)) +
+  scale_color_manual(values = "black")
+```
+
+## Plot Data Test Harga Nikel
+```{r}
+data_nikel.test <- data_nikel[245:305,]
+library(ggplot2)
+ggplot() + 
+  geom_line(data = data_nikel.test, aes(x=Date, y=Nikel)) +
+  labs(title = "Plot Data Test Harga Nikel Berjangka", x = "Waktu", y = "Nikel (rupiah)", color = "Legend") + scale_x_date(date_breaks = "3 months", date_labels = "%Y %b") + 
+  theme_bw() + theme(plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+                     plot.caption = element_text(hjust=0.5, size=12)) +
+  scale_color_manual(values = "black")
+```
+
+## Pembentukan Model Regresi
+```{r}
+reg1  <- lm(train.trans~nikel.train)
+summary(reg1)
+```
+
+## Pemodelan Sisaan Model Regresi
+### Cek Kestasioneran Data
+### Plot ACF 
+```{r}
+sisaanx <- reg1$residuals
+acf(sisaanx, lag.max = 24, main = "Plot ACF Sisaan Regresi")
+```
+Berdasarkan Plot ACF Sisaan, nilai korelasi antar lag terlihat pada plot di atas menurun secara perlahan (*tails off slowly*). Hal tersebut mengindikasikan bahwa sisaan tidak stasioner dalam rataan. Perlu dilakukan uji formal untuk mengambil kesimpulan kestasioneran data.
+
+## Uji Formal
+Secara formal, metode Augmented Dickey-Fuller (ADF) dapat memberikan hasil uji secara akurat untuk menentukan apakah sebuah data stasioner atau tidak. Dengan hipotesis yang diuji sebagai berikut :
+H0 : Nilai tengah sisaan tidak stasioner
+H1 : Nilai tengah sisaan stasioner
+α = 5% = 0.05
+```{r}
+tseries::adf.test(sisaanx)
+```
+Berdasarkan hasil Augmented Dickey-Fuller Test (ADF Test) didapatkan p-value = 0.6481 > α, maka tak tolak H0. Artinya, tidak cukup bukti untuk mengatakan bahwa sisaan stasioner pada taraf nyata 5%. Sehingga, perlu dilakukan pembedaan sebelum melakukan penentuan model tentatif.
+
+### Penanganan Ketidakstasioneran Data
+### Pembedaan sebanyak 1 kali
+```{r}
+sisaanx.dif <- diff(sisaanx, difference = 1)
+```
+
+### Cek kestasioneran data
+### Uji Formal ADF
+Pengujian menggunakan Augmented Dickey-Fuller Test
+H0: Nilai tengah sisaan tidak stasioner
+H1: Nilai tengah sisaan stasioner
+α= 5% = 0.05
+```{r}
+tseries::adf.test(sisaanx.dif)
+```
+Berdasarkan hasil Augmented Dickey-Fuller Test (ADF Test) didapatkan *p-value* = 0.01 < α, maka tolak $H_0$. Artinya, cukup bukti untuk mengatakan bahwa sisaan sudah stasioner pada taraf nyata 5% setelah dilakukan pembedaan sebanyak 1 kali.
+
+## Identifikasi Model dari Sisaan Model Regresi
+### Plot ACF
+```{r}
+acf(sisaanx.dif, main = "Plot ACF Sisaan Setelah Differencing satu kali")
+```
+Berdasarkan plot tersebut, terlihat bahwa plot ACF cenderung *cuts off* pada lag 2, sehingga jika plot ACF dianggap tails off. Model tentatifnya ARIMAX(0,1,2)
+
+## Plot PACF
+```{r}
+pacf(sisaanx.dif, lag.max = 24, main = "Plot PACF Sisaan Setelah Differencing satu kali")
+```
+Berdasarkan plot tersebut, terlihat bahwa plot PACF cenderung *cuts off* pada lag ke 2, sehingga jika plot ACF dianggap tails off. Model tentatifnya adalah ARIMAX(2,1,0).
+
+Jika baik plot ACF maupun plot PACF keduanya dianggap *tails off*, maka model yang terbentuk adalah ARIMAX(2,1,2)
+
+## Plot EACF
+```{r}
+eacf(sisaanx.dif)
+```
+
+Dari Matriks EACF dapat diduga model yang cocok adalah model ARIMAX(0,1,2) dan ARIMAX(1,1,2)
+
+## Identifikasi Model Tentatif
+Berdasarkan plot ACF, PACF, dan EACF, diperoleh 4 model tentatif beserta orde parameternya, sebagai berikut:
+1. ARIMAX(0,1,2)
+2. ARIMAX(2,1,0)
+3. ARIMAX(2,1,2)
+4. ARIMAX(1,1,2)
+
+```{r}
+modelx1 <- Arima(train.trans, order = c(0,1,2), xreg = nikel.train, method = "ML")
+modelx2 <- Arima(train.trans, order = c(2,1,0), xreg = nikel.train, method = "ML")
+modelx3 <- Arima(train.trans, order = c(2,1,2), xreg = nikel.train, method = "ML")
+modelx4 <- Arima(train.trans, order = c(1,1,2), xreg = nikel.train, method = "ML")
+modelx5 <- Arima(train.trans, order = c(2,1,1), xreg = nikel.train, method = "ML")
+```
+
+### ARIMAX(0,1,2)
+```{r}
+coeftest(modelx1) #tidak seluruh parameter signifikan
+round(modelx1$aic, 3) #-593.226
+```
+
+### ARIMAX(2,1,0)
+```{r}
+coeftest(modelx2) #tidak seluruh parameter signifikan
+round(modelx2$aic, 3) #-593.313
+```
+
+### ARIMAX(2,1,2)
+```{r}
+coeftest(modelx3) #seluruh parameter signifikan
+round(modelx3$aic, 3) #-595.133
+```
+
+### ARIMAX(1,1,2)
+```{r}
+coeftest(modelx4) #tidak seluruh parameter signifikan
+round(modelx4$aic, 3) #-591.231
+```
+
+### ARIMAX(2,1,1)
+```{r}
+coeftest(modelx5) #tidak seluruh parameter signifikan
+round(modelx5$aic, 3) #-591.322
+```
+
+Pada hasil uji signifikansi, hanya ARIMAX (2,1,2) yang seluruh parameternya signifikan. Selain itu ARIMAX (2,1,2) memiliki AIC yang paling kecil dari pada model lainnya yaitu -595.133. Selanjutnya model ARIMAX (2,1,2) akan di-overfitting.
+
+## Overfitting
+### ARIMAX(3,1,2)
+```{r}
+model1x.over <- Arima(train.trans, order = c(3,1,2), xreg = nikel.train, method = "ML")
+coeftest(model1x.over) #tidak seluruh parameter signifikan
+round(model1x.over$aic, 3) #-593.133
+```
+
+### ARIMAX(2,1,3)
+```{r}
+model2x.over <- Arima(train.trans, order = c(2,1,3), xreg = nikel.train, method = "ML")
+coeftest(model2x.over) #tidak seluruh parameter signifikan
+round(model2x.over$aic, 3) #-593.132
+```
+
+Maka model ARIMAX(2,1,2) tidak terjadi overfitting atau merupakan model yang baik untuk digunakan.
+
+## Diagnostik Model ARIMAX(2,1,2)
+```{r}
+sisaan.arimax <- modelx3$residuals
+```
+
+```{r}
+#Eksplorasi 
+par(mfrow=c(2,2)) 
+qqnorm(sisaan.arimax) 
+qqline(sisaan.arimax, col = "blue", lwd = 2) 
+plot(c(1:length(sisaan.arimax)),sisaan.arimax) 
+acf(sisaan.arimax) 
+pacf(sisaan.arimax) 
+par(mfrow = c(1,1))
+```
+
+### Uji Formal
+```{r}
+#1) Sisaan Menyebar Normal 
+ks.test(sisaan.arimax,"pnorm")  #tak tolak H0 > sisaan menyebar normal
+```
+Pada tahapan ini uji formal yang digunakan untuk normalitas adalah uji Kolmogorov-Smirnov (KS). Hipotesis pada uji KS adalah sebagai berikut.
+
+$H_0$ : Sisaan menyebar normal
+
+$H_1$ : Sisaan tidak menyebar normal
+
+Berdasarkan uji Kolmogorov-Smirnov tersebut, didapat *p-value* sebesar < 2.2e-16 yang kurang dari taraf nyata 5% sehingga tolak $H_0$ dan menandakan bahwa sisaan tidak menyebar normal.
+
+```{r}
+#2) Sisaan saling bebas/tidak ada autokorelasi 
+Box.test(sisaan.arimax, type = "Ljung")  #tak tolak H0 > sisaan saling bebas
+```
+Selanjutnya akan dilakukan uji formal untuk kebebasan sisaan menggunakan uji Ljung-Box. Hipotesis yang digunakan adalah sebagai berikut.
+
+$H_0$ : Sisaan saling bebas
+
+$H_1$ : Sisaan tidak tidak saling bebas
+
+Berdasarkan uji Ljung-Box tersebut, didapat *p-value* sebesar 0.9778 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa sisaan saling bebas.
+
+```{r}
+#3) Sisaan homogen 
+Box.test((sisaan.arimax)^2, type = "Ljung")  #tak tolak H0 > sisaan homogen
+```
+Hipotesis yang digunakan untuk uji kehomogenan ragam adalah sebagai berikut.
+
+$H_0$ : Ragam sisaan homogen
+
+$H_1$ : Ragam sisaan tidak homogen
+
+Berdasarkan uji Ljung-Box terhadap sisaan kuadrat tersebut, didapat *p-value* sebesar 0.0002243 yang kurang dari taraf nyata 5% sehingga tolak $H_0$ dan menandakan bahwa ragam sisaan tidak homogen.
+
+```{r}
+#4) Nilai tengah sisaan sama dengan nol 
+t.test(sisaan.arimax, mu = 0, conf.level = 0.95)  #tak tolak h0 > nilai tengah sisaan sama dengan 0
+```
+Terakhir, dengan uji-t, akan dicek apakah nilai tengah sisaan sama dengan nol. Hipotesis yang diujikan sebagai berikut.
+
+$H_0$ : nilai tengah sisaan sama dengan 0
+
+$H_1$ : nilai tengah sisaan tidak sama dengan 0
+
+Berdasarkan uji-t tersebut, didapat *p-value* sebesar 0.4741 yang lebih besar dari taraf nyata 5% sehingga tak tolak $H_0$ dan menandakan bahwa nilai tengah sisaan sama dengan nol.
+
+## Forecasting
+```{r}
+ramalan.arimax <- forecast::forecast((modelx3), xreg = nikel.test)
+data.ramalan.arimax<- ramalan.arimax$mean
+ramalan.arimax <- predict(modelx3,  n.ahead = 61, newxreg = data.frame(nikel.test))
+```
+
+```{r}
+pt_2 <- train.trans[length(train.trans)] #nilai akhir data latih
+hasil.forc.Diff2 <- ramalan.arimax$pred
+hasil <- diffinv(hasil.forc.Diff2, differences = 1) + pt_2
+Hasil3 <- exp(hasil.forc.Diff2)
+ts.plot(data.ts,xlab = "Periode", ylab = "Harga Penutupan Saham ANTAM", col="black",lwd=2,main="Forecasting ARIMAX(2,1,2)",gpars = list(col.main="black",col.axis="black",col.sub="black"))
+lines(Hasil3, col = "blue",lwd=2)
+legend("bottomright", 100,20,legend = c("Data Training", "Data Testing", "Data Forecast ARIMAX(2,1,2)"), 
+       lwd=2, col=c("black","red","blue"), cex=0.8)
+box(col="black",lwd=2)
+```
+
+## Akurasi
+```{r}
+perbandingan.da2<-matrix(data=c(head(data.ts.test, n=61), Hasil3),
+                     nrow = 61, ncol = 2)
+colnames(perbandingan.da2)<-c("Aktual","Hasil Forecast")
+perbandingan.da2
+library(generics)
+accuracy(ts(Hasil3), head(data.ts.test, n=61))
+```
+Didapatkan, nilai MAPE sebesar 5.60772 pada model ARIMAX(2,1,2)
+
+### Uji ARCH-Lagrange Multiplier (ARCH-LM)
+```{r}
+for (i in 1:20) {
+  ArchTest <- ArchTest(sisaan.arimax, lags=i, demean=TRUE)
+  cat("P Value LM Test lag ke", i,"adalah" , ArchTest$p.value, "\n") }
+```
+
+Setelah dilakukan uji efek ARCH untuk 20 lag awal, semua nilai p-value menunjukkan signifikan, sehingga akan dicoba dengan GARCH.
+
+## Pemodelan GARCH
+```{r}
+train.diff.ts <- ts(train.diff)
+nikel.train.diff <- diff(nikel.train)
+matrix_nikel_train_diff <- as.matrix(nikel.train.diff)
+nikel.test.diff <- diff(nikel.test)
+matrix_nikel_test_diff <- as.matrix(nikel.test.diff)
+```
+
+```{r}
+# Model ARIMAX(2,1,2)-GARCH(1,1)
+garch11diffc <- rugarch::ugarchspec(mean.model = list(armaOrder = c(2,2), external.regressors = matrix_nikel_train_diff, include.mean = FALSE),
+                     variance.model = list(model = "sGARCH",garchOrder=c(1,1)))
+garch11Fittdiff <- ugarchfit(spec=garch11diffc, data=train.diff)
+garch11Fittdiff
+```
+
+Setelah dilakukan trial and error pada model ARIMAX-GARCH, didapatkan model terbaik yaitu ARIMAX(2,1,2)-GARCH(1,1) dengan parameter yang seluruhnya signifikan pada taraf nyata 5%, ARCH LM yang sudah tidak signifikan, dan memiliki nilai AIC yang kecil sebesar -2.5752.
+
+## Overfitting 
+```{r}
+# Model ARIMAX(2,1,2)-GARCH(2,1)
+garch21diffc <- rugarch::ugarchspec(mean.model = list(armaOrder = c(2,2), external.regressors = matrix_nikel_train_diff, include.mean = FALSE),
+                     variance.model = list(model = "sGARCH",garchOrder=c(2,1)))
+garch21Fittdiff <- ugarchfit(spec=garch21diffc, data=train.diff)
+garch21Fittdiff
+```
+
+Pada model ARIMAX(2,1,2)-GARCH(2,1) tidak seluruh parameternya signifikan, ARCH LM tidak signifikan, AIC sebesar -2.5590
+
+```{r}
+# Model ARIMAX(2,1,2)-GARCH(1,2)
+garch12diffc <- rugarch::ugarchspec(mean.model = list(armaOrder = c(2,2), external.regressors = matrix_nikel_train_diff, include.mean = FALSE),
+                     variance.model = list(model = "sGARCH",garchOrder=c(1,2)))
+garch12Fittdiff <- ugarchfit(spec=garch12diffc, data=train.diff)
+garch12Fittdiff
+```
+
+Pada model ARIMAX(2,1,2)-GARCH(1,2) tidak seluruh parameternya signifikan, ARCH LM tidak signifikan, AIC sebesar -2.5670. Maka, model terbaik tetap ARIMAX(2,1,2)-GARCH(1,1)
+
+## Uji Diagnostik model ARIMAX(2,1,2)-GARCH(1,1)
+```{r}
+sisaan.akhir <- garch11Fittdiff@fit[["residuals"]]
+qqnorm(sisaan.akhir)
+qqline(sisaan.akhir , col = "blue", lwd = 2)
+
+# Uji Formal
+#1) Uji Normalitas
+ks.test(sisaan.akhir,"pnorm")  #tak tolak H0 > sisaan menyebar normal
+#tolak H0 -> sisaan tidak menyebar normal
+
+#2) Uji Kebebasan
+Box.test(sisaan.akhir , type = "Ljung")
+#tak tolak H0 -> sisaan saling bebas
+
+#3) Uji Nilai tengah sisaan = 0
+t.test(sisaan.akhir, mu = 0, conf.level = 0.95) 
+#tak tolak h0 -> nilai tengah sisaan sama dengan 0
+```
+
+## Forecasting dengan model ARIMAX(2,1,2)-GARCH(1,1)
+```{r}
+forc<- ugarchforecast(fitORspec = garch11Fittdiff, n.ahead = 60, n.roll = 0, external.forecasts = list(mregfor = matrix_nikel_test_diff, vregfor = NULL))
+plot(forc, which= 1)
+```
+
+```{r}
+pt_1 <- train.trans[244] #nilai akhir data latih
+hasil.forc.Diff <- forc@forecast$seriesFor[,1]
+hasilgarch <- diffinv(hasil.forc.Diff, differences = 1) + pt_1
+hasilyoo <- hasilgarch
+hasilakhir <- exp(hasilyoo) 
+perbandingan <- data.frame("Aktual"= data.test$Close,
+                           "Ramalan" = hasilakhir)
+head(perbandingan,10)
+```
+
+## MAPE Data Uji
+```{r}
+Date<-c(data.test$Date) 
+dataframe <- data.frame(Date, perbandingan) 
+T <- nrow(dataframe) 
+MAPE <- 1/T*sum(abs((dataframe$Aktual-dataframe$Ramalan)/dataframe$Aktual)*100)
+MAPE
+```
+
+## Validasi Model
+```{r}
+plot(data.ts, xlab = "Periode", ylab = "Harga Penutupan Saham ANTAM", col = "darkgreen", lwd = 2, main = "Forecasting ARIMAX(2,1,2)-GARCH(1,1)", type = "l")
+lines(245:length(data.ts), data.ts[245:length(data.ts)], col = "red", lwd = 2)
+lines(245:length(data.ts), hasilakhir, col = "blue", lwd = 2)
+legend("bottomright", 100, 20, legend = c("Data Latih", "Data Uji", "Prediksi ARIMAX(2,1,2)-GARCH(1,1)"),
+       lwd = 2, col = c("darkgreen", "red", "blue"), cex = 0.8)
+box(col = "black", lwd = 2)
+```
+
+
